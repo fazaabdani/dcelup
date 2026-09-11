@@ -180,6 +180,12 @@ button:disabled {
   border-top: 1px dashed var(--line);
 }
 
+.admin-login.embedded {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
 .admin-login h2 {
   margin: 0 0 4px;
   font-size: 18px;

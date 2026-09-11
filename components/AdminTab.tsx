@@ -4,6 +4,7 @@ import { netProfit, rupiah, soldCost, soldTotal } from "@/lib/calc";
 import { DAILY_ELECTRIC, DAILY_MOM } from "@/lib/menu";
 import MoneyPanel from "@/components/MoneyPanel";
 import AuditTrail from "@/components/AuditTrail";
+import ChangePasswordForm from "@/components/ChangePasswordForm";
 import type { ActionLogData, HistoryEntry, MenuData, ShiftData, TransactionData } from "@/lib/types";
 
 export default function AdminTab({
@@ -19,6 +20,7 @@ export default function AdminTab({
   onChangeCost,
   onCloseShift,
   onExport,
+  onChangePassword,
 }: {
   shift: ShiftData;
   transactions: TransactionData[];
@@ -32,6 +34,7 @@ export default function AdminTab({
   onChangeCost: (id: string, delta: number) => void;
   onCloseShift: () => void;
   onExport: () => void;
+  onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
 }) {
   return (
     <>
@@ -127,6 +130,10 @@ export default function AdminTab({
           </div>
         </>
       ) : null}
+      <div className="section-title">
+        <h2>Akun</h2>
+      </div>
+      <ChangePasswordForm onSubmit={onChangePassword} />
       <div className="danger-zone">
         <button className="tap-button full" onClick={onExport}>
           Export Backup (JSON)

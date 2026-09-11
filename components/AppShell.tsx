@@ -171,6 +171,13 @@ export default function AppShell({ session }: { session: SessionInfo }) {
     });
   }
 
+  async function changePassword(currentPassword: string, newPassword: string) {
+    await apiFetch("/api/auth/password", {
+      method: "PATCH",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+  }
+
   function exportBackup() {
     window.open(`/api/export?date=${data?.shift.date || ""}`, "_blank");
   }
@@ -268,6 +275,7 @@ export default function AppShell({ session }: { session: SessionInfo }) {
             onChangeCost={changeCost}
             onCloseShift={closeShift}
             onExport={exportBackup}
+            onChangePassword={changePassword}
           />
         ) : null}
       </section>
