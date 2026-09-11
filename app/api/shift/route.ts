@@ -9,9 +9,25 @@ export async function GET(request: Request) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { searchParams } = new URL(request.url);
-  const date = searchParams.get("date") || todayKey();
+  const today = todayKey();
+  const date = searchParams.get("date") || today;
 
-  const shift = await getOrCreateShift(date);
+  // Cuma tanggal hari ini yang boleh membuat baris baru (itu yang bikin
+  // rollover otomatis). Tanggal lain (mis. dicoba lewat query param manual)
+  // harus read-only - kalau belum ada datanya, jangan diam-diam membuat
+  // baris kosong permanen di DB.
+  const shift =
+    date === today
+      ? await getOrCreateShift(date)
+      : (await prisma.shift.findUnique({ where: { date } })) ?? {
+          date,
+          isOpen: false,
+          openingCash: 0,
+          physicalCash: 0,
+          dailyWage: 0,
+          leftovers: {},
+          taken: {},
+        };
   const transactions = await prisma.transaction.findMany({
     where: { shiftDate: date },
     orderBy: { createdAt: "asc" },
