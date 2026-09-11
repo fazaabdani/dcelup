@@ -47,6 +47,32 @@ const WAGE_ADD_MONEY = [5000, 10000, 20000];
 const DAILY_MOM = 20000;
 const DAILY_ELECTRIC = 10000;
 const STORAGE_KEY = "dcelup-chicken-state-v2";
+const ADMIN_USERNAME = "admin";
+// SHA-256 of the demo password (documented in README). Avoids leaving the
+// plaintext sitting in source; still not a substitute for server-side auth.
+const ADMIN_PASSWORD_HASH = "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9";
+
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function isAdmin() {
+  return state.user?.role === "admin";
+}
+
+function logAction(type, detail) {
+  state.actionLog ||= [];
+  state.actionLog.push({
+    type,
+    detail,
+    at: new Date().toLocaleString("id-ID"),
+    by: state.user?.name || "system",
+  });
+  state.actionLog = state.actionLog.slice(-50);
+}
 
 const defaultShift = () => ({
   date: todayKey(),
@@ -68,6 +94,8 @@ const defaultState = {
   shift: defaultShift(),
   transactions: [],
   deletedTransactions: [],
+  history: [],
+  actionLog: [],
   costs: Object.fromEntries(MENU.map((item) => [item.id, item.cost])),
 };
 
@@ -82,22 +110,50 @@ function loadState() {
   }
 }
 
+function archiveDay(target, reason) {
+  const hasData =
+    (Array.isArray(target.transactions) && target.transactions.length) ||
+    (Array.isArray(target.deletedTransactions) && target.deletedTransactions.length) ||
+    target.shift?.isOpen;
+  if (!hasData) return;
+  target.history = Array.isArray(target.history) ? target.history : [];
+  target.history.unshift({
+    date: target.shift?.date || "unknown",
+    shift: target.shift,
+    transactions: target.transactions,
+    deletedTransactions: target.deletedTransactions,
+    actionLog: target.actionLog || [],
+    archivedAt: new Date().toISOString(),
+    reason,
+  });
+  target.history = target.history.slice(0, 30);
+}
+
 function normalizeState(next) {
+  if (!Array.isArray(next.history)) next.history = [];
+  if (!Array.isArray(next.actionLog)) next.actionLog = [];
   if (!next.shift || next.shift.date !== todayKey()) {
+    archiveDay(next, "auto-rollover");
     next.shift = defaultShift();
     next.transactions = [];
     next.deletedTransactions = [];
+    next.actionLog.push({
+      type: "rollover",
+      detail: "Pergantian tanggal otomatis - data hari sebelumnya diarsipkan",
+      at: new Date().toLocaleString("id-ID"),
+      by: "system",
+    });
   }
   next.shift.leftovers ||= {};
   next.shift.taken ||= {};
   next.shift.dailyWage ||= 0;
   next.shift.physicalCash ||= 0;
   next.costs ||= Object.fromEntries(MENU.map((item) => [item.id, item.cost]));
-  next.cart ||= [];
-  next.transactions ||= [];
-  next.deletedTransactions ||= [];
+  if (!Array.isArray(next.cart)) next.cart = [];
+  if (!Array.isArray(next.transactions)) next.transactions = [];
+  if (!Array.isArray(next.deletedTransactions)) next.deletedTransactions = [];
   next.tab ||= "jualan";
-  next.selectedGroup ||= "original";
+  if (!GROUPS.some((group) => group.id === next.selectedGroup)) next.selectedGroup = "original";
   next.reportMode ||= "sisa";
   next.adminError ||= "";
   return next;
@@ -107,8 +163,10 @@ function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+function todayKey(date = new Date()) {
+  // WIB (Asia/Jakarta), bukan UTC - toISOString() lama bikin rollover meleset
+  // sekitar jam 00.00-06.59 WIB.
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(date);
 }
 
 function menuById(id) {
@@ -159,12 +217,39 @@ function app(html) {
 }
 
 function render() {
-  save();
-  if (!state.user) {
-    renderLogin();
-    return;
+  try {
+    save();
+    if (!state.user) {
+      renderLogin();
+      return;
+    }
+    renderShell();
+  } catch (err) {
+    console.error("Render error:", err);
+    renderCrash();
   }
-  renderShell();
+}
+
+function renderCrash() {
+  app(`
+    <section class="login-wrap">
+      <div class="login-card">
+        <div class="login-hero">
+          <div class="logo">!</div>
+          <h1>Data Rusak</h1>
+          <p>Aplikasi menemukan data tersimpan yang tidak valid dan tidak bisa ditampilkan.</p>
+        </div>
+        <button class="tap-button full warn" onclick="hardReset()">Reset Data Lokal</button>
+        <div class="notice">Transaksi hari ini yang belum di-export lewat menu Admin akan hilang setelah reset.</div>
+      </div>
+    </section>
+  `);
+}
+
+function hardReset() {
+  if (!confirm("Reset seluruh data lokal? Tindakan ini tidak bisa dibatalkan.")) return;
+  localStorage.removeItem(STORAGE_KEY);
+  location.reload();
 }
 
 function renderLogin() {
@@ -184,9 +269,9 @@ function renderLogin() {
         </div>
         <form class="admin-login" onsubmit="adminLogin(event)">
           <h2>Login Admin</h2>
-          <label>Username</label>
+          <label for="adminUsername">Username</label>
           <input id="adminUsername" autocomplete="username" />
-          <label>Password</label>
+          <label for="adminPassword">Password</label>
           <input id="adminPassword" type="password" autocomplete="current-password" />
           ${state.adminError ? `<div class="form-error">${state.adminError}</div>` : ""}
           <button class="tap-button primary full" type="submit">Masuk Admin</button>
@@ -241,7 +326,7 @@ function renderShell() {
 }
 
 function renderSales() {
-  const active = GROUPS.find((group) => group.id === state.selectedGroup);
+  const active = GROUPS.find((group) => group.id === state.selectedGroup) || GROUPS[0];
   const activeItems = active.itemIds.map(menuById);
   return `
     ${!state.shift.isOpen ? closedShiftNotice() : ""}
@@ -385,7 +470,9 @@ function renderAdmin() {
       ${MENU.map(renderCostRow).join("")}
     </div>
     ${renderAuditTrail()}
+    ${renderHistoryList()}
     <div class="danger-zone">
+      <button class="tap-button full" onclick="exportBackup()">Export Backup (JSON)</button>
       <button class="tap-button full warn" onclick="newDay()">Tutup & Mulai Hari Baru</button>
     </div>
   `;
@@ -448,6 +535,46 @@ function renderAuditTrail() {
           .join("") || `<div class="cart-empty">Belum ada transaksi yang dihapus.</div>`
       }
     </div>
+    <div class="section-title"><h2>Riwayat Aksi Admin</h2><span class="pill">${(state.actionLog || []).length} aksi</span></div>
+    <div class="history-list">
+      ${
+        (state.actionLog || [])
+          .slice()
+          .reverse()
+          .slice(0, 20)
+          .map(
+            (entry) => `
+              <div class="history-item audit">
+                <div class="history-top"><span>${entry.at}</span><strong>${entry.type}</strong></div>
+                <div class="history-detail">${entry.detail} - oleh ${entry.by}</div>
+              </div>
+            `
+          )
+          .join("") || `<div class="cart-empty">Belum ada aksi tercatat.</div>`
+      }
+    </div>
+  `;
+}
+
+function renderHistoryList() {
+  const history = state.history || [];
+  if (!history.length) return "";
+  return `
+    <div class="section-title"><h2>Riwayat Hari Sebelumnya</h2><span class="pill">${history.length} hari</span></div>
+    <div class="history-list">
+      ${history
+        .map((day) => {
+          const activeTx = (day.transactions || []).filter((tx) => !tx.deletedAt);
+          const total = activeTx.reduce((sum, tx) => sum + tx.total, 0);
+          return `
+            <div class="history-item">
+              <div class="history-top"><span>${day.date}</span><strong>${rupiah.format(total)}</strong></div>
+              <div class="history-detail">${activeTx.length} transaksi aktif - ${day.reason === "auto-rollover" ? "arsip otomatis" : "ditutup admin"}</div>
+            </div>
+          `;
+        })
+        .join("")}
+    </div>
   `;
 }
 
@@ -459,11 +586,12 @@ function shortMoney(amount) {
   return amount >= 1000 ? `${amount / 1000}rb` : String(amount);
 }
 
-function adminLogin(event) {
+async function adminLogin(event) {
   event.preventDefault();
   const username = document.querySelector("#adminUsername").value.trim();
   const password = document.querySelector("#adminPassword").value;
-  if (username === "admin" && password === "admin123") {
+  const passwordHash = await sha256Hex(password);
+  if (username === ADMIN_USERNAME && passwordHash === ADMIN_PASSWORD_HASH) {
     state.adminError = "";
     state.user = { role: "admin", name: "Admin" };
     state.tab = state.shift.isOpen ? "report" : "admin";
@@ -545,6 +673,7 @@ function saveTransaction() {
 function deleteTransaction(id) {
   const tx = state.transactions.find((item) => item.id === id && !item.deletedAt);
   if (!tx) return;
+  if (!confirm("Hapus transaksi ini? Jejak hapus akan tetap terlihat oleh admin.")) return;
   const stamp = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
   tx.deletedAt = stamp;
   tx.deletedBy = state.user.name;
@@ -564,12 +693,16 @@ function changeReport(key, delta) {
 }
 
 function resetReportCounts() {
+  const label = state.reportMode === "sisa" ? "Sisa" : "Diambil";
+  if (!confirm(`Reset semua hitungan "${label}" ke nol?`)) return;
   if (state.reportMode === "sisa") state.shift.leftovers = {};
   if (state.reportMode === "diambil") state.shift.taken = {};
+  logAction("resetReport", `Reset hitungan ${label}`);
   render();
 }
 
 function setMoney(type, amount) {
+  if ((type === "opening" || type === "physical") && !isAdmin()) return;
   if (type === "opening") state.shift.openingCash = amount;
   if (type === "physical") state.shift.physicalCash = amount;
   if (type === "wage") state.shift.dailyWage = amount;
@@ -577,6 +710,7 @@ function setMoney(type, amount) {
 }
 
 function addMoney(type, amount) {
+  if ((type === "opening" || type === "physical") && !isAdmin()) return;
   if (type === "opening") state.shift.openingCash += amount;
   if (type === "physical") state.shift.physicalCash += amount;
   if (type === "wage") state.shift.dailyWage += amount;
@@ -584,17 +718,40 @@ function addMoney(type, amount) {
 }
 
 function openShift() {
+  if (!isAdmin()) return;
   state.shift.isOpen = true;
   state.tab = "jualan";
   render();
 }
 
 function changeCost(id, delta) {
+  if (!isAdmin()) return;
   state.costs[id] = Math.max(0, Number(state.costs[id] || 0) + delta);
   render();
 }
 
+function exportBackup() {
+  if (!isAdmin()) return;
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    ...state,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `dcelup-backup-${todayKey()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function newDay() {
+  if (!isAdmin()) return;
+  if (!confirm("Tutup hari ini dan mulai hari baru? Data hari ini akan diarsipkan (bukan dihapus).")) return;
+  archiveDay(state, "manual-admin");
+  logAction("newDay", "Tutup hari manual oleh admin");
   state.shift = defaultShift();
   state.transactions = [];
   state.deletedTransactions = [];
@@ -604,3 +761,11 @@ function newDay() {
 }
 
 render();
+
+// Rollover otomatis kalau tab dibiarkan terbuka lewat tengah malam WIB.
+setInterval(() => {
+  if (state.shift.date !== todayKey()) {
+    state = normalizeState(state);
+    render();
+  }
+}, 60000);
