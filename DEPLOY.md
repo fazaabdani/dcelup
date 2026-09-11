@@ -67,11 +67,23 @@ kembali ke v1 (v1 cuma baca localStorage per device) - rollback ini untuk situas
 
 ## Backup
 
-Database `dcelup_chicken` di volume `dcelup_pgdata` **belum masuk ke sistem backup otomatis**
-server toko (lihat `D:\backup otmatis server\rencana-backup-otomatis-google-drive.md`) - perlu
-ditambahkan config `pg_dump` harian terpisah, sama seperti app Postgres lain di server ini
-(`nexabyte-invoice.conf`, `core-fscomp.conf`). **TODO sebelum benar-benar dipakai untuk transaksi
-harian toko.**
+Sudah masuk ke sistem backup harian generik server toko per 2026-09-11 (config
+`/srv/fscomp/server-config/apps-backup.d/dcelup.conf`, engine `postgres-dump`, sama seperti
+`nexabyte-invoice.conf`/`core-fscomp.conf`) - tidak perlu script/timer baru, cukup file config
+ini karena `backup-apps-daily-all.sh` sudah loop semua `*.conf` otomatis.
+
+- Jalan tiap hari jam 22:00 WIB (root crontab, sudah ada sebelumnya, tidak diubah).
+- `pg_dump -Fc` dari container `dcelup-app-dcelup-db-1` + tar seluruh folder
+  `/home/faza/dcelup-app` (termasuk `.env` produksi untuk kebutuhan redeploy/rollback).
+- Upload otomatis ke `gdrive:FS-Server/apps-daily/dcelup/<tanggal>`, retensi 30 hari (lokal &
+  Google Drive).
+- **Sudah diuji manual end-to-end 2026-09-11**: dump terkonfirmasi valid
+  (`PostgreSQL custom database dump - v1.15-0` via `file`), checksum SHA256 dibuat, dan file
+  terkonfirmasi muncul di Google Drive lewat `rclone lsl`. Restore belum pernah dipraktikkan -
+  kalau perlu, `pg_restore` dari file `.dump` ke container `dcelup-db` yang masih kosong/baru.
+
+Detail infra backup lintas-app ada di
+`D:\backup otmatis server\rencana-backup-otomatis-google-drive.md`.
 
 ## Health check
 
