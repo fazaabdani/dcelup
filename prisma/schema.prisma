@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  name         String
+  passwordHash String
+  role         String   @default("ADMIN")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+}
+
+model MenuItem {
+  id        String @id // "ori_dada", dst - sama seperti konstanta MENU versi lama
+  groupId   String
+  name      String
+  variant   String
+  price     Int
+  cost      Int
+  sortOrder Int    @default(0)
+}
+
+// Satu baris per tanggal (WIB) - jadi "hari baru" otomatis kebentuk begitu ada
+// request pertama di tanggal baru (lihat lib/shift.ts getOrCreateShift), dan
+// data hari-hari lama tetap permanen di sini tanpa perlu logic arsip manual.
+model Shift {
+  date         String      @id
+  isOpen       Boolean     @default(false)
+  openingCash  Int         @default(0)
+  physicalCash Int         @default(0)
+  dailyWage    Int         @default(0)
+  leftovers    Json        @default("{}")
+  taken        Json        @default("{}")
+  updatedAt    DateTime    @updatedAt
+  transactions Transaction[]
+  actionLogs   ActionLog[]
+}
+
+model Transaction {
+  id        String   @id @default(cuid())
+  shiftDate String
+  shift     Shift    @relation(fields: [shiftDate], references: [date])
+  time      String
+  total     Int
+  cashier   String
+  items     Json // snapshot: [{id,name,variant,price,cost,qty}]
+  deletedAt String?
+  deletedBy String?
+  createdAt DateTime @default(now())
+
+  @@index([shiftDate])
+}
+
+model ActionLog {
+  id        String   @id @default(cuid())
+  shiftDate String?
+  shift     Shift?   @relation(fields: [shiftDate], references: [date])
+  type      String
+  detail    String
+  by        String
+  createdAt DateTime @default(now())
+
+  @@index([shiftDate])
+}
